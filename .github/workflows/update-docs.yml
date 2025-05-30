@@ -1,0 +1,39 @@
+# .github/workflows/update-docs.yml
+name: Send code diff to Ollama
+
+on:
+  push:
+    branches: [ main ]        # fires AFTER a PR is merged
+
+jobs:
+  diff-to-ollama:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # we need full history for git diff
+
+      - name: Build diff & JSON manifest
+        id: diff
+        run: |
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.sha }}"
+          git diff --unified=0 "$BEFORE" "$AFTER" > changes.patch
+          CHANGED_JSON=$(git diff --name-status "$BEFORE" "$AFTER" \
+                          | jq -R -s -c 'split("\n")[:-1] | map(split("\t")) |
+                             map({status:.[0], path:.[1]})')
+          echo "changed_json=$CHANGED_JSON" >> "$GITHUB_OUTPUT"
+
+      # ⬇️ THIS is the step that uses curl -F
+      - name: POST to Ollama agent
+        env:
+          OLLAMA_TOKEN: ${{ secrets.OLLAMA_TOKEN }}
+        run: |
+          curl -sSf -X POST https://smart-documentor.deeptimaanbanerjee.tech/update-doc \
+            -H "Authorization: Bearer $OLLAMA_TOKEN" \
+            -F "repository=${{ github.repository }}" \
+            -F "before_sha=${{ github.event.before }}" \
+            -F "after_sha=${{ github.sha }}" \
+            -F "changed_json=${{ steps.diff.outputs.changed_json }}" \
+            -F "patch=@changes.patch"
